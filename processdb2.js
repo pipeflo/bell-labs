@@ -28,7 +28,7 @@ const VisualRecognitionV3 = require('ibm-watson/visual-recognition/v3');
 const visualRecognition = new VisualRecognitionV3({
   url: 'https://gateway.watsonplatform.net/visual-recognition/api',
   version: '2018-03-19',
-  iam_apikey: '2n6mILOhEMyG81IfV65nD7thvWpL3pD6PQ3cQuVssDaI'
+  iam_apikey: '?'
 });
 
 const accessToken = process.argv[2];
