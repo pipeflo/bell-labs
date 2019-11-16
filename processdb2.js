@@ -1,15 +1,26 @@
 const async = require('async');
 const mysql = require('mysql');
 const fs = require('fs');
+const ibmdb = require('ibm_db');
 //Datos de conexión
-const connection = mysql.createConnection({
-  connectionLimit: 10,
-  host: '?',
-  user: '?',
-  password: '?',
-  database: '?',
-  port: '?'
-});
+const db2 = {
+  db: '?',
+  hostname: '?',
+  port: 50000,
+  username: '?',
+  password: '?'
+};
+const connString =
+  'DRIVER={DB2};DATABASE=' +
+  db2.db +
+  ';UID=' +
+  db2.username +
+  ';PWD=' +
+  db2.password +
+  ';HOSTNAME=' +
+  db2.hostname +
+  ';port=' +
+  db2.port;
 
 const request = require('request');
 const VisualRecognitionV3 = require('ibm-watson/visual-recognition/v3');
@@ -128,9 +139,9 @@ function procesarArchivo() {
                   const result = JSON.parse(body);
                   const insert = generarInsert(datosImagen.name, result);
                   //console.log('Vamos a insertar:', insert);
-                  guardarMySql(insert, function(err, result) {
+                  guardarDB2(insert, function(err, result) {
                     if (err) {
-                      console.log('Error guardando en mysql:', err);
+                      console.log('Error guardando en DB2 out:', err);
                       return callback(err);
                     } else {
                       //eliminar linea del archivo
@@ -165,19 +176,35 @@ function guardarArchivo(lines) {
   });
 }
 
-function guardarMySql(insert, callback) {
-  // Use the connection
-  connection.query(insert, function(error, results, fields) {
-    // Handle error after the release.
-    if (error) {
-      callback(error, null);
+function guardarDB2(insert, callback) {
+  //open DB2 connection
+  ibmdb.open(connString, function(err, conn) {
+    if (err) {
+      res.send('error occurred ' + err.message);
     } else {
-      callback(null, results);
+      conn.prepare(insert.sql, function(err, stmt) {
+        if (err) {
+          //could not prepare for some reason
+          console.log('Error preparando statement:', err);
+          return conn.closeSync();
+        }
+
+        //Bind and Execute the statment asynchronously
+        stmt.execute(insert.values, function(err, result) {
+          if (err) {
+            console.log('Error insertando en DB2:', err);
+            //Close the connection
+            conn.close(function(err) {});
+            callback(err, null);
+          } else {
+            result.closeSync();
+            //Close the connection
+            conn.close(function(err) {});
+            callback(null, result);
+          }
+        });
+      });
     }
-
-    //process.exit();
-
-    // Don't use the connection here, it has been returned to the pool.
   });
 }
 
@@ -196,72 +223,49 @@ function generarInsert(name, result) {
     camera = values[0] + ' ' + values[1];
     videoFile = values[2] + '_' + values[3].substring(0, values[2].length - 7);
   }
+  let insert = {};
 
-  let insert = '';
+  insert.sql = `INSERT
+  INTO  BELLLABS.RESULTS (IMAGE_FILE_NAME,DATE_OF_VIDEO,TIME_OF_VIDEO,CAMERA,CONFIDENCE_THRESHOLD,CONFIDENCE_WATSON,SPECIES_IDENTIFIED,MUS_MUSCULUS_IN_FRAME,PEROMYSCUS_IN_FRAME,TIME_SPENT_IN_STATION,IMAGE_URL) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   if (isEmpty(result.images[0].objects)) {
-    insert = `INSERT INTO compose.results
-      (image_file_name,
-      date_of_video,
-      time_of_video,
+    insert.values = [
+      name,
+      date,
+      videoFile,
       camera,
-      confidence_threshold,
-      confidence_watson,
-      species_identified,
-      mus_musculus_in_frame,
-      peromyscus_in_frame,
-      time_spent_in_station,
-      image_url)
-      VALUES
-      ("${name}",
-      "${date}",
-      "${videoFile}",
-      "${camera}",
-      "0.5",
-      "0.0",
-      "No species found on the image",
-      NULL,
-      NULL,
-      NULL,
-      "${result.images[0].source.source_url}")`;
+      '0.5',
+      '0.0',
+      'No species found on the image',
+      'NULL',
+      'NULL',
+      'NULL',
+      result.images[0].source.source_url
+    ];
   } else {
     const location = `Left: ${result.images[0].objects.collections[0].objects[0].location.left}, Top: ${result.images[0].objects.collections[0].objects[0].location.top}, Width: ${result.images[0].objects.collections[0].objects[0].location.width}, Height: ${result.images[0].objects.collections[0].objects[0].location.height}`;
-    insert = `INSERT INTO compose.results
-      (image_file_name,
-      date_of_video,
-      time_of_video,
+    insert.values = [
+      name,
+      date,
+      videoFile,
       camera,
-      confidence_threshold,
-      confidence_watson,
-      species_identified,
-      mus_musculus_in_frame,
-      peromyscus_in_frame,
-      time_spent_in_station,
-      image_url)
-      VALUES
-      ("${name}",
-      "${date}",
-      "${videoFile}",
-      "${camera}",
-      "0.5",
-      "${result.images[0].objects.collections[0].objects[0].score}",
-      "${result.images[0].objects.collections[0].objects[0].object}",
-      "${
-        result.images[0].objects.collections[0].objects[0].object ===
-        'Mus_musculus'
-          ? location
-          : 'NULL'
-      }",
-      "${
-        result.images[0].objects.collections[0].objects[0].object ===
-        'Peromyscus_maniculatis'
-          ? location
-          : 'NULL'
-      }",
-      NULL,
-      "${result.images[0].source.source_url}")`;
+      '0.5',
+      result.images[0].objects.collections[0].objects[0].score.toString(),
+      result.images[0].objects.collections[0].objects[0].object,
+      result.images[0].objects.collections[0].objects[0].object ===
+      'Mus_musculus'
+        ? location
+        : 'NULL',
+      result.images[0].objects.collections[0].objects[0].object ===
+      'Peromyscus_maniculatis'
+        ? location
+        : 'NULL',
+      'NULL',
+      result.images[0].source.source_url
+    ];
   }
-  //console.log('insert:', insert);
+  console.log('insert:', insert.sql);
+  console.log('values:', insert.values);
   return insert;
 }
 
